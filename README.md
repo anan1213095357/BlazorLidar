@@ -33,13 +33,11 @@
 
 ## 📸 界面预览
 
-> *在此处上传你的运行截图，建议放置一张 GIF 展示扫描效果*
-
-| 待机模式 | 扫描与布防 |
-| :---: | :---: |
-| ![Standby](<img width="2095" height="1390" alt="22293163-1a1d-47b7-8489-9df591efb0fc" src="https://github.com/user-attachments/assets/9d70ebf2-c48c-45e6-bc60-8ab66ae32b81" />
-) | ![Scanning](https://via.placeholder.com/400x300?text=Scanning+Active) |
-
+<div align="center">
+    <img src="https://github.com/user-attachments/assets/9d70ebf2-c48c-45e6-bc60-8ab66ae32b81" width="100%" alt="Tactical Radar Interface" />
+    <br>
+    <sub><i>战术雷达终端主控界面 (Tactical Terminal Main View)</i></sub>
+</div>
 ---
 
 ## 🛠️ 技术栈
