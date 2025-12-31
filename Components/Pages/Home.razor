@@ -1,0 +1,542 @@
+﻿@page "/"
+@using BlazorLidar.Data
+@inject LidarService LidarService
+@inject IJSRuntime JS
+@implements IDisposable
+
+<PageTitle>战术雷达终端</PageTitle>
+
+<div class="lidar-container crt-effect">
+    <div class="sidebar">
+        <div class="brand">
+            <h2>TACTICAL<span>RADAR</span></h2>
+            <div class="status-badge @(IsScanning ? "active" : "")">
+                <span class="dot"></span> @(IsScanning ? "系统在线" : "等待指令")
+            </div>
+        </div>
+
+        <div class="control-panel">
+            <h3>通信参数配置</h3>
+            <div class="form-group">
+                <label>端口 (PORT)</label>
+                <input type="text" class="form-input" @bind="PortName" placeholder="COM3" disabled="@IsScanning" />
+            </div>
+            <div class="form-group">
+                <label>波特率 (BAUD)</label>
+                <input type="number" class="form-input" @bind="BaudRate" disabled="@IsScanning" />
+            </div>
+        </div>
+
+        <div class="control-panel">
+            <h3>主控操作</h3>
+            <button class="btn btn-primary" @onclick="StartScan" disabled="@IsScanning">
+                [ 启动雷达扫描 ]
+            </button>
+            <button class="btn btn-danger" @onclick="StopScan" disabled="@(!IsScanning)">
+                [ 紧急切断电源 ]
+            </button>
+        </div>
+
+        <div class="control-panel" style="border-top: 1px solid var(--border); padding-top:15px;">
+            <h3>防御区域 (ZONE)</h3>
+
+            <button class="btn btn-warning" @onclick="StartDrawingZone">
+                [ + 添加布防区域 ]
+            </button>
+
+            @if (IsZoneSet)
+            {
+                <button class="btn btn-danger-outline" @onclick="ClearZone" style="margin-top: 5px;">
+                    [ 清除所有布防 ]
+                </button>
+                <div class="zone-active-indicator">
+                    多区域防御系统已激活
+                </div>
+            }
+            else
+            {
+                <div style="font-size:10px; color:#aaa; margin-bottom:10px; margin-top:5px;">
+                    * 点击并在雷达图上拖拽圆圈<br />
+                    * 可重复添加多个监测点
+                </div>
+            }
+        </div>
+
+        <div class="log-panel">
+            <div class="log-header">
+                <span>报警记录</span>
+                <button class="clear-log-btn" @onclick="ClearLogs">CLR</button>
+            </div>
+            <div class="log-content">
+                @foreach (var log in AlarmLogs)
+                {
+                    <div class="log-item">@log</div>
+                }
+            </div>
+        </div>
+
+        <div class="stats-panel">
+            <div class="stat-row">
+                <span class="label">点云缓冲区</span>
+                <span class="value">@PointCount PTS</span>
+            </div>
+        </div>
+
+        <div class="footer-note">
+            RADAR OS v2.2 <br /> MIL-STD-810G COMPLIANT
+        </div>
+    </div>
+
+    <div class="main-view">
+        <div class="grid-overlay"></div>
+        <canvas id="lidarCanvas"></canvas>
+
+        @if (!string.IsNullOrEmpty(ErrorMessage))
+        {
+            <div class="osd-message error">错误: @ErrorMessage</div>
+        }
+    </div>
+</div>
+
+<style>
+    /* 保持原有样式完全不变 */
+    :root {
+        --bg-dark: #020b02;
+        --bg-panel: #051405;
+        --text-main: #ccffcc;
+        --text-muted: #4a7a4a;
+        --primary: #39ff14;
+        --primary-dim: rgba(57, 255, 20, 0.1);
+        --danger: #ff3333;
+        --warning: #ffff00;
+        --border: #1a4d1a;
+        --input-bg: #002200;
+    }
+
+    body {
+        margin: 0;
+        font-family: 'Consolas', monospace;
+        background-color: var(--bg-dark);
+        overflow: hidden;
+    }
+
+    .lidar-container {
+        display: flex;
+        height: 100vh;
+        width: 100vw;
+        color: var(--text-main);
+    }
+
+    .sidebar {
+        width: 340px;
+        background-color: var(--bg-panel);
+        border-right: 2px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        padding: 25px;
+        z-index: 100;
+        box-shadow: 10px 0 30px rgba(0,50,0,0.5);
+    }
+
+    /* 品牌 & 状态 */
+    .brand h2 {
+        font-size: 28px;
+        font-weight: 900;
+        letter-spacing: 4px;
+        margin: 0 0 15px 0;
+        text-shadow: 0 0 10px var(--primary-dim);
+    }
+
+        .brand h2 span {
+            color: var(--primary);
+            text-shadow: 0 0 15px var(--primary);
+        }
+
+    .status-badge {
+        display: inline-flex;
+        align-items: center;
+        background: #002200;
+        padding: 6px 16px;
+        border: 1px solid var(--border);
+        font-size: 14px;
+        color: var(--text-muted);
+    }
+
+        .status-badge.active {
+            background: var(--primary-dim);
+            color: var(--primary);
+            border-color: var(--primary);
+            animation: text-pulse 2s infinite;
+        }
+
+    .dot {
+        width: 10px;
+        height: 10px;
+        background: #333;
+        margin-right: 10px;
+    }
+
+    .status-badge.active .dot {
+        background: var(--primary);
+        box-shadow: 0 0 10px var(--primary);
+        animation: blink 0.5s infinite alternate;
+    }
+
+    /* 面板 */
+    h3 {
+        font-size: 14px;
+        color: var(--primary);
+        border-left: 4px solid var(--primary);
+        padding-left: 10px;
+        margin-bottom: 20px;
+        background: linear-gradient(90deg, var(--primary-dim), transparent);
+    }
+
+    .form-group {
+        margin-bottom: 15px;
+    }
+
+        .form-group label {
+            display: block;
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-bottom: 5px;
+        }
+
+    .form-input {
+        width: 100%;
+        background: var(--input-bg);
+        border: 1px solid var(--border);
+        color: var(--primary);
+        padding: 8px;
+        font-family: 'Consolas';
+        outline: none;
+    }
+
+    /* 按钮 */
+    .btn {
+        display: block;
+        width: 100%;
+        padding: 12px;
+        margin-bottom: 10px;
+        border: 1px solid var(--primary);
+        font-family: 'Consolas';
+        font-weight: bold;
+        cursor: pointer;
+        background: var(--primary-dim);
+        color: var(--primary);
+        transition: 0.2s;
+    }
+
+        .btn:hover:not(:disabled) {
+            background: var(--primary);
+            color: #000;
+            box-shadow: 0 0 20px var(--primary);
+        }
+
+    .btn-danger {
+        border-color: var(--danger);
+        color: var(--danger);
+        background: transparent;
+    }
+
+        .btn-danger:hover:not(:disabled) {
+            background: var(--danger);
+            color: #fff;
+            box-shadow: 0 0 20px var(--danger);
+        }
+
+    .btn-warning {
+        border-color: var(--warning);
+        color: var(--warning);
+        background: rgba(255,255,0,0.1);
+    }
+
+        .btn-warning:hover {
+            background: var(--warning);
+            color: #000;
+            box-shadow: 0 0 20px var(--warning);
+        }
+
+    .btn-danger-outline {
+        border-color: var(--danger);
+        color: var(--danger);
+        background: transparent;
+        border-style: dashed;
+    }
+
+    .btn:disabled {
+        opacity: 0.3;
+        cursor: not-allowed;
+        border-color: #555;
+        color: #555;
+    }
+
+    /* 防御区指示器 */
+    .zone-active-indicator {
+        color: var(--danger);
+        text-align: center;
+        font-weight: bold;
+        animation: blink 1s infinite;
+        border: 1px solid var(--danger);
+        padding: 5px;
+        background: rgba(255,0,0,0.1);
+        margin-bottom: 15px;
+    }
+
+    /* 日志面板 */
+    .log-panel {
+        flex: 1;
+        border: 1px solid var(--border);
+        background: #001100;
+        margin: 10px 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        font-size: 12px;
+    }
+
+    .log-header {
+        background: var(--border);
+        padding: 5px 10px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        color: #fff;
+    }
+
+    .clear-log-btn {
+        background: #333;
+        border: none;
+        color: #fff;
+        cursor: pointer;
+        font-size: 10px;
+        padding: 2px 6px;
+    }
+
+        .clear-log-btn:hover {
+            background: var(--danger);
+        }
+
+    .log-content {
+        flex: 1;
+        overflow-y: auto;
+        padding: 5px;
+        font-family: monospace;
+    }
+
+    .log-item {
+        color: var(--danger);
+        margin-bottom: 2px;
+        border-bottom: 1px solid #113311;
+    }
+
+        .log-item:before {
+            content: ">> ";
+            color: #555;
+        }
+
+    /* 统计与底部 */
+    .stat-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 10px 0;
+        border-bottom: 1px dashed var(--border);
+        font-size: 14px;
+    }
+
+    .footer-note {
+        margin-top: auto;
+        text-align: center;
+        font-size: 10px;
+        color: #2a4a2a;
+    }
+
+    /* 主视图 */
+    .main-view {
+        flex: 1;
+        position: relative;
+        background: radial-gradient(circle at 50% 50%, #051805 0%, #000 90%);
+        overflow: hidden;
+    }
+
+    canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+        position: relative;
+        z-index: 2;
+    }
+
+    .grid-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 1;
+        pointer-events: none;
+        background-image: linear-gradient(rgba(0,50,0,0.3) 1px, transparent 1px), linear-gradient(90deg, rgba(0,50,0,0.3) 1px, transparent 1px);
+        background-size: 50px 50px;
+    }
+
+    /* OSD 消息 */
+    .osd-message {
+        position: absolute;
+        bottom: 20px;
+        right: 20px;
+        z-index: 10;
+        padding: 10px 20px;
+        font-weight: bold;
+    }
+
+        .osd-message.error {
+            background: rgba(255,0,0,0.2);
+            border: 1px solid var(--danger);
+            color: var(--danger);
+        }
+
+    /* 动画 */
+    @@keyframes blink {
+        from {
+            opacity: 1;
+        }
+
+        to {
+            opacity: 0.3;
+        }
+    }
+
+    @@keyframes text-pulse {
+        0%, 100% {
+            text-shadow: 0 0 5px var(--primary);
+        }
+
+        50% {
+            text-shadow: 0 0 15px var(--primary);
+        }
+    }
+</style>
+
+@code {
+    private IJSObjectReference? _module;
+    private DotNetObjectReference<Home>? _objRef;
+
+    private bool IsScanning = false;
+    private int PointCount = 0;
+    private System.Threading.Timer? _uiTimer;
+    private int _uiUpdateThrottle = 0;
+    private string ErrorMessage = "";
+
+    // 区域与报警状态
+    private bool IsZoneSet = false;
+    private List<string> AlarmLogs = new();
+
+    // 默认配置
+    private string PortName { get; set; } = "COM21";
+    private int BaudRate { get; set; } = 150000;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _objRef = DotNetObjectReference.Create(this);
+            _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/lidarRenderer.js");
+            await _module.InvokeVoidAsync("initLidar", "lidarCanvas", _objRef);
+            _uiTimer = new System.Threading.Timer(PushDataToClient, null, 0, 16);
+        }
+    }
+
+    private void StartScan()
+    {
+        ErrorMessage = "";
+        try
+        {
+            LidarService.Start(PortName, BaudRate);
+            IsScanning = true;
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = $"启动失败: {ex.Message}";
+            IsScanning = false;
+        }
+    }
+
+    private void StopScan()
+    {
+        IsScanning = false;
+        LidarService.Stop();
+    }
+
+    private async Task StartDrawingZone()
+    {
+        if (_module != null)
+        {
+            await _module.InvokeVoidAsync("startZoneDrawing");
+        }
+    }
+
+    private async Task ClearZone()
+    {
+        if (_module != null)
+        {
+            await _module.InvokeVoidAsync("clearZone");
+            IsZoneSet = false;
+            AlarmLogs.Insert(0, $"[{DateTime.Now:HH:mm:ss}] 所有防御区域已解除");
+        }
+    }
+
+    private void ClearLogs()
+    {
+        AlarmLogs.Clear();
+    }
+
+    [JSInvokable]
+    public void OnZoneSet()
+    {
+        // 只要添加了一个区域，就认为布防已激活
+        IsZoneSet = true;
+        AlarmLogs.Insert(0, $"[{DateTime.Now:HH:mm:ss}] 新防御节点已建立");
+        StateHasChanged();
+    }
+
+    [JSInvokable]
+    public void TriggerAlarm(string msg)
+    {
+        var log = $"[{DateTime.Now:HH:mm:ss}] 警报: {msg}";
+        if (AlarmLogs.Count > 100) AlarmLogs.RemoveAt(AlarmLogs.Count - 1);
+        AlarmLogs.Insert(0, log);
+        InvokeAsync(StateHasChanged);
+    }
+
+    private async void PushDataToClient(object? state)
+    {
+        if (!IsScanning || _module == null) return;
+        var points = LidarService.FetchNewPoints();
+        if (points.Count > 0)
+        {
+            await _module.InvokeVoidAsync("pushData", points);
+            _uiUpdateThrottle++;
+            if (_uiUpdateThrottle >= 20)
+            {
+                _uiUpdateThrottle = 0;
+                await InvokeAsync(() =>
+                {
+                    PointCount = points.Count;
+                    StateHasChanged();
+                });
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        LidarService.Stop();
+        _uiTimer?.Dispose();
+        _objRef?.Dispose();
+        if (_module != null)
+        {
+            _module.DisposeAsync();
+        }
+    }
+}
